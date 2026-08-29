@@ -1,0 +1,42 @@
+#!/bin/bash
+
+# pre-commit git hook to format and check Rust code.
+#
+# To install:
+#   chmod +x scripts/pre-commit
+#   ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+
+echo "=== Running pre-commit checks ==="
+
+# 1. 自動フォーマットの実行 (コマンドだけで修復可能なケース)
+echo "Running cargo fmt..."
+cargo fmt --all
+
+# フォーマットによって変更されたファイルを git に再追加する
+# ステージングされているファイルから .rs ファイルを抽出し、変更があれば git add する
+staged_rs_files=$(git diff --cached --name-only --diff-filter=d | grep '\.rs$' || true)
+if [ -n "$staged_rs_files" ]; then
+    git add $staged_rs_files
+fi
+
+# 2. 静的解析とエラーチェック (自動修復不可なケース)
+echo "Running cargo check..."
+if ! cargo check; then
+    echo "❌ cargo check failed. Commit aborted."
+    exit 1
+fi
+
+echo "Running cargo clippy..."
+if ! cargo clippy -- -D warnings; then
+    echo "❌ cargo clippy failed. Commit aborted."
+    exit 1
+fi
+
+echo "Running cargo test..."
+if ! cargo test; then
+    echo "❌ cargo test failed. Commit aborted."
+    exit 1
+fi
+
+echo "✅ All checks passed! Committing changes..."
+exit 0

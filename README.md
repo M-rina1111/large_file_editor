@@ -74,6 +74,20 @@ This repository includes pre-configured GitHub Actions under `.github/workflows/
 2. **Release (`release.yml`)**:
    - Automatically cross-compiles release binaries for macOS (Intel & Apple Silicon), Windows, and Linux, and uploads them to GitHub Releases upon pushing a version tag (e.g., `v1.0.0`).
    - `v*` 形式のタグがプッシュされた際に、macOS（Intel / Apple Silicon）、Windows、Linux向けにプロダクションビルド（`cargo build --release`）を行い、GitHub Releaseの成果物（Assets）として自動アップロードします。
+---
+
+## Git Hooks / コミット前自動チェック
+
+This repository includes a pre-commit hook that automatically formats, checks, lints, and tests your Rust code before each commit.
+本リポジトリには、コミット時に自動でコードのフォーマット整形、ビルド確認、Clippy警告の検証、およびテストを実行するコミット前フックが用意されています。
+
+To enable the pre-commit hook, run the following command in your terminal:
+このコミット前フックを有効化するには、以下のコマンドを実行してください：
+
+```bash
+chmod +x scripts/pre-commit
+ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+```
 
 ---
 
