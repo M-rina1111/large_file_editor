@@ -1,11 +1,11 @@
-use std::time::Instant;
 use std::sync::atomic::Ordering;
 use std::thread;
+use std::time::Instant;
 
 #[path = "../editor.rs"]
 mod editor;
 
-use editor::{LargeFileEditor, FileEncoding};
+use editor::{FileEncoding, LargeFileEditor};
 
 fn main() {
     let path = "/Users/zarus/dev/rust/large_file_editor/large_test.log";
@@ -35,7 +35,7 @@ fn main() {
     let matched_lines = editor.filter_results.read().unwrap().len();
     println!("Regex filter ('ERROR') completed in {:?}", filter_duration);
     println!("Matched lines count: {}", matched_lines);
-    
+
     // 特定の行の取得
     let line_start = Instant::now();
     let line = editor.get_line_string(1500000).unwrap();

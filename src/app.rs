@@ -8,20 +8,20 @@ use eframe::egui::Panel;
 pub struct LargeFileEditorApp {
     editor: Option<LargeFileEditor>,
     selected_encoding: FileEncoding,
-    
+
     // 検索・置換・フィルターのUI状態
     search_pattern: String,
     replace_pattern: String,
     filter_pattern: String,
-    
+
     // 設定
     create_backup: bool,
-    
+
     // スクロールおよび編集状態
     scroll_to_line: Option<usize>,
     editing_line_idx: Option<usize>,
     editing_text: String,
-    
+
     // ステータスメッセージ
     status_message: String,
     status_is_error: bool,
@@ -163,13 +163,16 @@ impl eframe::App for LargeFileEditorApp {
 
                 ui.separator();
                 ui.label("エンコーディング:");
-                
+
                 let mut temp_encoding = self.selected_encoding;
                 egui::ComboBox::from_id_salt("encoding_select")
                     .selected_text(temp_encoding.to_label())
                     .show_ui(ui, |ui| {
                         for enc in FileEncoding::all_cases() {
-                            if ui.selectable_value(&mut temp_encoding, *enc, enc.to_label()).clicked() {
+                            if ui
+                                .selectable_value(&mut temp_encoding, *enc, enc.to_label())
+                                .clicked()
+                            {
                                 next_encoding = Some(*enc);
                             }
                         }
@@ -194,14 +197,18 @@ impl eframe::App for LargeFileEditorApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.label("🔍 検索/置換 (正規表現):");
-                    ui.add(egui::TextEdit::singleline(&mut self.search_pattern)
-                        .hint_text("パターン...")
-                        .desired_width(180.0));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.search_pattern)
+                            .hint_text("パターン...")
+                            .desired_width(180.0),
+                    );
 
                     ui.label("置換先:");
-                    ui.add(egui::TextEdit::singleline(&mut self.replace_pattern)
-                        .hint_text("置換先...")
-                        .desired_width(150.0));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.replace_pattern)
+                            .hint_text("置換先...")
+                            .desired_width(150.0),
+                    );
 
                     if ui.button("🔄 全体一括バッチ置換").clicked() {
                         batch_replace_clicked = true;
@@ -210,9 +217,11 @@ impl eframe::App for LargeFileEditorApp {
                     ui.separator();
 
                     ui.label("⚡ フィルター行抽出:");
-                    let filter_edit = ui.add(egui::TextEdit::singleline(&mut self.filter_pattern)
-                        .hint_text("パターンで絞り込み...")
-                        .desired_width(180.0));
+                    let filter_edit = ui.add(
+                        egui::TextEdit::singleline(&mut self.filter_pattern)
+                            .hint_text("パターンで絞り込み...")
+                            .desired_width(180.0),
+                    );
 
                     if filter_edit.changed() || ui.button("適用").clicked() {
                         filter_applied = true;
@@ -233,7 +242,7 @@ impl eframe::App for LargeFileEditorApp {
                     let scan_progress = ed.scan_progress.load(Ordering::Relaxed);
                     let scan_finished = ed.scan_finished.load(Ordering::SeqCst);
                     let line_count = ed.total_lines();
-                    
+
                     ui.label(format!("行数: {}", line_count));
                     ui.separator();
 
@@ -256,11 +265,17 @@ impl eframe::App for LargeFileEditorApp {
                         let matched_count = ed.filter_results.read().unwrap().len();
 
                         if !filter_finished {
-                            ui.label(format!("⏳ 検索中: {} 行スキャン ({} 行ヒット)...", filter_progress, matched_count));
+                            ui.label(format!(
+                                "⏳ 検索中: {} 行スキャン ({} 行ヒット)...",
+                                filter_progress, matched_count
+                            ));
                             ui.ctx().request_repaint();
                         } else {
                             if let Some(err) = ed.filter_error.read().unwrap().as_ref() {
-                                ui.colored_label(egui::Color32::LIGHT_RED, format!("❌ 正規表現エラー: {}", err));
+                                ui.colored_label(
+                                    egui::Color32::LIGHT_RED,
+                                    format!("❌ 正規表現エラー: {}", err),
+                                );
                             } else {
                                 ui.label(format!("✅ 完了: {} 行ヒット", matched_count));
                             }
@@ -299,17 +314,24 @@ impl eframe::App for LargeFileEditorApp {
                                     for idx in range {
                                         let original_line_idx = matched_lines[idx];
                                         if let Some(line) = ed.get_line_string(original_line_idx) {
-                                            let label_text = format!("{}: {}", original_line_idx + 1, line.trim_end());
-                                            
+                                            let label_text = format!(
+                                                "{}: {}",
+                                                original_line_idx + 1,
+                                                line.trim_end()
+                                            );
+
                                             let response = ui.add(
                                                 egui::Button::new(
                                                     egui::RichText::new(label_text)
                                                         .monospace()
-                                                        .size(12.0)
+                                                        .size(12.0),
                                                 )
                                                 .frame(false)
                                                 .wrap_mode(egui::TextWrapMode::Truncate)
-                                                .min_size(egui::vec2(ui.available_width(), row_height))
+                                                .min_size(egui::vec2(
+                                                    ui.available_width(),
+                                                    row_height,
+                                                )),
                                             );
 
                                             if response.clicked() {
@@ -353,7 +375,7 @@ impl eframe::App for LargeFileEditorApp {
                                     egui::TextEdit::multiline(&mut self.editing_text)
                                         .font(egui::TextStyle::Monospace)
                                         .desired_width(ui.available_width())
-                                        .desired_rows(12)
+                                        .desired_rows(12),
                                 );
                             });
                         ui.add_space(8.0);
@@ -361,9 +383,19 @@ impl eframe::App for LargeFileEditorApp {
                         // 下部に固定されるボタンエリア (ScrollArea の外)
                         ui.horizontal(|ui| {
                             if !self.search_pattern.is_empty() {
-                                if ui.button("🔍 置換適用").on_hover_text("この行に正規表現置換を適用").clicked() {
+                                if ui
+                                    .button("🔍 置換適用")
+                                    .on_hover_text("この行に正規表現置換を適用")
+                                    .clicked()
+                                {
                                     if let Ok(re) = Regex::new(&self.search_pattern) {
-                                        local_replace_text = Some(re.replace_all(&self.editing_text, &self.replace_pattern).into_owned());
+                                        local_replace_text = Some(
+                                            re.replace_all(
+                                                &self.editing_text,
+                                                &self.replace_pattern,
+                                            )
+                                            .into_owned(),
+                                        );
                                     }
                                 }
                             }
@@ -406,13 +438,15 @@ impl eframe::App for LargeFileEditorApp {
 
             if let Some((idx, text)) = apply_edit {
                 ed.edit_line(idx, text);
-                show_status_msg = Some((format!("{}行目を更新しました (メモリ上)。", idx + 1), false));
+                show_status_msg =
+                    Some((format!("{}行目を更新しました (メモリ上)。", idx + 1), false));
             }
 
             if let Some(idx) = delete_edit {
                 ed.delete_line(idx);
                 self.editing_line_idx = None;
-                show_status_msg = Some((format!("{}行目を削除しました (メモリ上)。", idx + 1), false));
+                show_status_msg =
+                    Some((format!("{}行目を削除しました (メモリ上)。", idx + 1), false));
             }
 
             if deselect_clicked {
@@ -443,14 +477,17 @@ impl eframe::App for LargeFileEditorApp {
                         if is_deleted {
                             ui.horizontal(|ui| {
                                 draw_line_number(ui, line_idx + 1, row_height);
-                                ui.colored_label(egui::Color32::DARK_GRAY, egui::RichText::new("(削除された行)").strikethrough());
+                                ui.colored_label(
+                                    egui::Color32::DARK_GRAY,
+                                    egui::RichText::new("(削除された行)").strikethrough(),
+                                );
                             });
                             continue;
                         }
 
                         if let Some(line) = line_text {
                             let mut layout_job = egui::text::LayoutJob::default();
-                            
+
                             // 行番号
                             let num_text = format!("{:>6} │ ", line_idx + 1);
                             layout_job.append(
@@ -460,7 +497,7 @@ impl eframe::App for LargeFileEditorApp {
                                     font_id: egui::FontId::monospace(13.0),
                                     color: egui::Color32::from_gray(120),
                                     ..Default::default()
-                                }
+                                },
                             );
 
                             let text_color = if is_edited {
@@ -470,7 +507,7 @@ impl eframe::App for LargeFileEditorApp {
                             };
 
                             let line_str = line.trim_end();
-                            
+
                             // 検索パターンのハイライト表示
                             if !self.search_pattern.is_empty() {
                                 if let Ok(re) = Regex::new(&self.search_pattern) {
@@ -484,7 +521,7 @@ impl eframe::App for LargeFileEditorApp {
                                                     font_id: egui::FontId::monospace(13.0),
                                                     color: text_color,
                                                     ..Default::default()
-                                                }
+                                                },
                                             );
                                         }
 
@@ -496,7 +533,7 @@ impl eframe::App for LargeFileEditorApp {
                                                 color: egui::Color32::BLACK,
                                                 background: egui::Color32::YELLOW,
                                                 ..Default::default()
-                                            }
+                                            },
                                         );
                                         last_idx = mat.end();
                                     }
@@ -508,7 +545,7 @@ impl eframe::App for LargeFileEditorApp {
                                                 font_id: egui::FontId::monospace(13.0),
                                                 color: text_color,
                                                 ..Default::default()
-                                            }
+                                            },
                                         );
                                     }
                                 } else {
@@ -519,7 +556,7 @@ impl eframe::App for LargeFileEditorApp {
                                             font_id: egui::FontId::monospace(13.0),
                                             color: text_color,
                                             ..Default::default()
-                                        }
+                                        },
                                     );
                                 }
                             } else {
@@ -530,7 +567,7 @@ impl eframe::App for LargeFileEditorApp {
                                         font_id: egui::FontId::monospace(13.0),
                                         color: text_color,
                                         ..Default::default()
-                                    }
+                                    },
                                 );
                             }
 
@@ -544,7 +581,7 @@ impl eframe::App for LargeFileEditorApp {
                             let mut button = egui::Button::new(layout_job)
                                 .frame(bg_color.is_some())
                                 .min_size(egui::vec2(ui.available_width(), row_height));
-                            
+
                             if let Some(bg) = bg_color {
                                 button = button.fill(bg);
                             } else {
@@ -579,13 +616,16 @@ impl eframe::App for LargeFileEditorApp {
         if open_file_clicked {
             if let Some(path) = rfd::FileDialog::new()
                 .set_title("テキストファイルを選択")
-                .pick_file() 
+                .pick_file()
             {
                 match LargeFileEditor::open(&path, self.selected_encoding) {
                     Ok(ed) => {
                         self.editor = Some(ed);
                         self.editing_line_idx = None;
-                        self.show_status(format!("ファイルをロードしました: {}", path.display()), false);
+                        self.show_status(
+                            format!("ファイルをロードしました: {}", path.display()),
+                            false,
+                        );
                     }
                     Err(e) => {
                         self.show_status(format!("エラー: {}", e), true);
@@ -602,7 +642,10 @@ impl eframe::App for LargeFileEditorApp {
                     Ok(new_ed) => {
                         self.editor = Some(new_ed);
                         self.editing_line_idx = None;
-                        self.show_status("指定エンコーディングでファイルを再ロードしました。", false);
+                        self.show_status(
+                            "指定エンコーディングでファイルを再ロードしました。",
+                            false,
+                        );
                     }
                     Err(e) => {
                         self.show_status(format!("再ロードエラー: {}", e), true);
@@ -625,11 +668,19 @@ impl eframe::App for LargeFileEditorApp {
             if let Some(ref ed) = self.editor {
                 if let Some(save_path) = rfd::FileDialog::new()
                     .set_title("名前を付けて保存")
-                    .set_file_name(ed.path.file_name().unwrap_or_default().to_string_lossy().as_ref())
+                    .set_file_name(
+                        ed.path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .as_ref(),
+                    )
                     .save_file()
                 {
                     match ed.save(&save_path, false) {
-                        Ok(_) => self.show_status(format!("保存完了: {}", save_path.display()), false),
+                        Ok(_) => {
+                            self.show_status(format!("保存完了: {}", save_path.display()), false)
+                        }
                         Err(e) => self.show_status(format!("保存失敗: {}", e), true),
                     }
                 }
@@ -642,11 +693,27 @@ impl eframe::App for LargeFileEditorApp {
                     self.show_status("検索正規表現パターンを入力してください。", true);
                 } else if let Some(dest_path) = rfd::FileDialog::new()
                     .set_title("一括置換後のファイル保存先")
-                    .set_file_name(ed.path.file_name().unwrap_or_default().to_string_lossy().as_ref())
+                    .set_file_name(
+                        ed.path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .as_ref(),
+                    )
                     .save_file()
                 {
-                    match ed.batch_replace(&self.search_pattern, &self.replace_pattern, &dest_path, false) {
-                        Ok(_) => show_status_msg = Some((format!("バッチ置換・保存完了: {}", dest_path.display()), false)),
+                    match ed.batch_replace(
+                        &self.search_pattern,
+                        &self.replace_pattern,
+                        &dest_path,
+                        false,
+                    ) {
+                        Ok(_) => {
+                            show_status_msg = Some((
+                                format!("バッチ置換・保存完了: {}", dest_path.display()),
+                                false,
+                            ))
+                        }
                         Err(e) => show_status_msg = Some((format!("置換失敗: {}", e), true)),
                     }
                 }
@@ -726,7 +793,7 @@ fn draw_line_number(ui: &mut egui::Ui, line_num: usize, row_height: f32) {
             egui::RichText::new(format!("{:>6} │ ", line_num))
                 .monospace()
                 .color(egui::Color32::from_gray(120))
-                .size(13.0)
-        )
+                .size(13.0),
+        ),
     );
 }

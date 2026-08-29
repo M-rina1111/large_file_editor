@@ -1,5 +1,5 @@
-mod editor;
 mod app;
+mod editor;
 
 use app::LargeFileEditorApp;
 

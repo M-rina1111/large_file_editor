@@ -1,3 +1,6 @@
+use encoding_rs::Encoding;
+use memmap2::Mmap;
+use regex::Regex;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -5,9 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread;
-use memmap2::Mmap;
-use encoding_rs::Encoding;
-use regex::Regex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileEncoding {
@@ -76,11 +76,14 @@ pub struct LargeFileEditor {
 }
 
 impl LargeFileEditor {
-    pub fn open<P: AsRef<Path>>(path: P, encoding: FileEncoding) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn open<P: AsRef<Path>>(
+        path: P,
+        encoding: FileEncoding,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let path = path.as_ref().to_path_buf();
         let file = File::open(&path)?;
         let file_size = file.metadata()?.len() as usize;
-        
+
         // 空ファイル対応
         let mmap = if file_size == 0 {
             // 空のMmapを作ることはできないため、ダミーの空Mmapやエラーハンドリングが必要
@@ -105,7 +108,13 @@ impl LargeFileEditor {
         let finished_clone = Arc::clone(&scan_finished);
 
         thread::spawn(move || {
-            scan_offsets(&mmap_clone, encoding, offsets_clone, progress_clone, finished_clone);
+            scan_offsets(
+                &mmap_clone,
+                encoding,
+                offsets_clone,
+                progress_clone,
+                finished_clone,
+            );
         });
 
         Ok(Self {
@@ -146,11 +155,11 @@ impl LargeFileEditor {
         } else {
             self.file_size
         };
-        
+
         if start >= self.file_size {
             return None;
         }
-        
+
         Some(&self.mmap[start..end])
     }
 
@@ -165,11 +174,14 @@ impl LargeFileEditor {
 
         let raw_bytes = self.get_line_raw(line_idx)?;
         let mut clean_bytes = raw_bytes;
-        
+
         // 末尾の改行バイトを除去
         match self.encoding {
             FileEncoding::Utf8 | FileEncoding::ShiftJis => {
-                while !clean_bytes.is_empty() && (clean_bytes[clean_bytes.len() - 1] == b'\n' || clean_bytes[clean_bytes.len() - 1] == b'\r') {
+                while !clean_bytes.is_empty()
+                    && (clean_bytes[clean_bytes.len() - 1] == b'\n'
+                        || clean_bytes[clean_bytes.len() - 1] == b'\r')
+                {
                     clean_bytes = &clean_bytes[..clean_bytes.len() - 1];
                 }
             }
@@ -300,14 +312,21 @@ impl LargeFileEditor {
                             let mut clean_bytes = raw_bytes;
                             match encoding {
                                 FileEncoding::Utf8 | FileEncoding::ShiftJis => {
-                                    while !clean_bytes.is_empty() && (clean_bytes[clean_bytes.len() - 1] == b'\n' || clean_bytes[clean_bytes.len() - 1] == b'\r') {
+                                    while !clean_bytes.is_empty()
+                                        && (clean_bytes[clean_bytes.len() - 1] == b'\n'
+                                            || clean_bytes[clean_bytes.len() - 1] == b'\r')
+                                    {
                                         clean_bytes = &clean_bytes[..clean_bytes.len() - 1];
                                     }
                                 }
                                 FileEncoding::Utf16Le => {
                                     while clean_bytes.len() >= 2 {
                                         let len = clean_bytes.len();
-                                        if (clean_bytes[len - 2] == 0x0A && clean_bytes[len - 1] == 0x00) || (clean_bytes[len - 2] == 0x0D && clean_bytes[len - 1] == 0x00) {
+                                        if (clean_bytes[len - 2] == 0x0A
+                                            && clean_bytes[len - 1] == 0x00)
+                                            || (clean_bytes[len - 2] == 0x0D
+                                                && clean_bytes[len - 1] == 0x00)
+                                        {
                                             clean_bytes = &clean_bytes[..len - 2];
                                         } else {
                                             break;
@@ -317,7 +336,11 @@ impl LargeFileEditor {
                                 FileEncoding::Utf16Be => {
                                     while clean_bytes.len() >= 2 {
                                         let len = clean_bytes.len();
-                                        if (clean_bytes[len - 2] == 0x00 && clean_bytes[len - 1] == 0x0A) || (clean_bytes[len - 2] == 0x00 && clean_bytes[len - 1] == 0x0D) {
+                                        if (clean_bytes[len - 2] == 0x00
+                                            && clean_bytes[len - 1] == 0x0A)
+                                            || (clean_bytes[len - 2] == 0x00
+                                                && clean_bytes[len - 1] == 0x0D)
+                                        {
                                             clean_bytes = &clean_bytes[..len - 2];
                                         } else {
                                             break;
@@ -325,7 +348,7 @@ impl LargeFileEditor {
                                     }
                                 }
                             }
-                            
+
                             let encoder = encoding.to_encoding();
                             let (decoded, _, _) = encoder.decode(clean_bytes);
                             re.is_match(&decoded)
@@ -485,7 +508,7 @@ fn scan_offsets(
                 let chunk_end = (pos + 4 * 1024 * 1024).min(len); // 4MB chunks
                 let chunk = &mmap[pos..chunk_end];
                 let mut local_offsets = Vec::new();
-                
+
                 for (i, &b) in chunk.iter().enumerate() {
                     if b == b'\n' {
                         let next_pos = pos + i + 1;
@@ -494,12 +517,12 @@ fn scan_offsets(
                         }
                     }
                 }
-                
+
                 if !local_offsets.is_empty() {
                     let mut offsets = line_offsets.write().unwrap();
                     offsets.extend(local_offsets);
                 }
-                
+
                 pos = chunk_end;
                 scan_progress.store(pos, Ordering::Relaxed);
             }
@@ -509,7 +532,7 @@ fn scan_offsets(
                 let chunk_end = (pos + 4 * 1024 * 1024).min(len);
                 let mut local_offsets = Vec::new();
                 let mut i = 0;
-                
+
                 while pos + i + 1 < chunk_end {
                     let b1 = mmap[pos + i];
                     let b2 = mmap[pos + i + 1];
@@ -521,12 +544,12 @@ fn scan_offsets(
                     }
                     i += 2;
                 }
-                
+
                 if !local_offsets.is_empty() {
                     let mut offsets = line_offsets.write().unwrap();
                     offsets.extend(local_offsets);
                 }
-                
+
                 pos = chunk_end;
                 scan_progress.store(pos, Ordering::Relaxed);
             }
@@ -536,7 +559,7 @@ fn scan_offsets(
                 let chunk_end = (pos + 4 * 1024 * 1024).min(len);
                 let mut local_offsets = Vec::new();
                 let mut i = 0;
-                
+
                 while pos + i + 1 < chunk_end {
                     let b1 = mmap[pos + i];
                     let b2 = mmap[pos + i + 1];
@@ -548,12 +571,12 @@ fn scan_offsets(
                     }
                     i += 2;
                 }
-                
+
                 if !local_offsets.is_empty() {
                     let mut offsets = line_offsets.write().unwrap();
                     offsets.extend(local_offsets);
                 }
-                
+
                 pos = chunk_end;
                 scan_progress.store(pos, Ordering::Relaxed);
             }
@@ -567,8 +590,8 @@ fn scan_offsets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_utf8_load_and_search() {
@@ -578,7 +601,7 @@ mod tests {
         file.flush().unwrap();
 
         let mut editor = LargeFileEditor::open(file.path(), FileEncoding::Utf8).unwrap();
-        
+
         while !editor.scan_finished.load(Ordering::SeqCst) {
             thread::sleep(std::time::Duration::from_millis(10));
         }
@@ -586,12 +609,12 @@ mod tests {
         assert_eq!(editor.total_lines(), 4);
         assert_eq!(editor.get_line_string(0).unwrap(), "Hello World");
         assert_eq!(editor.get_line_string(1).unwrap(), "こんにちは 世界");
-        
+
         editor.start_filter("ERROR");
         while !editor.filter_finished.load(Ordering::SeqCst) {
             thread::sleep(std::time::Duration::from_millis(10));
         }
-        
+
         let results = editor.filter_results.read().unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], 3);
@@ -628,7 +651,9 @@ mod tests {
         }
 
         let dest = NamedTempFile::new().unwrap();
-        editor.batch_replace("INFO", "DEBUG", dest.path(), false).unwrap();
+        editor
+            .batch_replace("INFO", "DEBUG", dest.path(), false)
+            .unwrap();
 
         let new_editor = LargeFileEditor::open(dest.path(), FileEncoding::Utf8).unwrap();
         while !new_editor.scan_finished.load(Ordering::SeqCst) {
