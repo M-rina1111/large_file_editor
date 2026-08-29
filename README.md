@@ -74,3 +74,10 @@ This repository includes pre-configured GitHub Actions under `.github/workflows/
 2. **Release (`release.yml`)**:
    - Automatically cross-compiles release binaries for macOS (Intel & Apple Silicon), Windows, and Linux, and uploads them to GitHub Releases upon pushing a version tag (e.g., `v1.0.0`).
    - `v*` 形式のタグがプッシュされた際に、macOS（Intel / Apple Silicon）、Windows、Linux向けにプロダクションビルド（`cargo build --release`）を行い、GitHub Releaseの成果物（Assets）として自動アップロードします。
+
+---
+
+## License / ライセンス
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+本プロジェクトは **MITライセンス** のもとで公開されています。詳細は [LICENSE](LICENSE) ファイルをご覧ください。
