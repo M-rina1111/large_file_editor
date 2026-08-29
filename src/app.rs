@@ -674,9 +674,7 @@ impl eframe::App for LargeFileEditorApp {
                 .save_file();
             if let Some(save_path) = opt_save_path {
                 match ed.save(&save_path, false) {
-                    Ok(_) => {
-                        self.show_status(format!("保存完了: {}", save_path.display()), false)
-                    }
+                    Ok(_) => self.show_status(format!("保存完了: {}", save_path.display()), false),
                     Err(e) => self.show_status(format!("保存失敗: {}", e), true),
                 }
             }

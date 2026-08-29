@@ -323,8 +323,9 @@ impl LargeFileEditor {
                                 FileEncoding::Utf16Le => {
                                     while clean_bytes.len() >= 2 {
                                         let len = clean_bytes.len();
-                                         if (clean_bytes[len - 2] == 0x0A || clean_bytes[len - 2] == 0x0D)
-                                             && clean_bytes[len - 1] == 0x00
+                                        if (clean_bytes[len - 2] == 0x0A
+                                            || clean_bytes[len - 2] == 0x0D)
+                                            && clean_bytes[len - 1] == 0x00
                                         {
                                             clean_bytes = &clean_bytes[..len - 2];
                                         } else {
@@ -335,8 +336,9 @@ impl LargeFileEditor {
                                 FileEncoding::Utf16Be => {
                                     while clean_bytes.len() >= 2 {
                                         let len = clean_bytes.len();
-                                         if (clean_bytes[len - 1] == 0x0A || clean_bytes[len - 1] == 0x0D)
-                                             && clean_bytes[len - 2] == 0x00
+                                        if (clean_bytes[len - 1] == 0x0A
+                                            || clean_bytes[len - 1] == 0x0D)
+                                            && clean_bytes[len - 2] == 0x00
                                         {
                                             clean_bytes = &clean_bytes[..len - 2];
                                         } else {
