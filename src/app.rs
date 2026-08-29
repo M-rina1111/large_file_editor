@@ -94,6 +94,7 @@ fn ui_ctx_from_creation_context(cc: &eframe::CreationContext<'_>) -> egui::Conte
 }
 
 impl eframe::App for LargeFileEditorApp {
+    #[allow(clippy::collapsible_if, clippy::unnecessary_unwrap)]
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         ctx.set_visuals(egui::Visuals::dark());
@@ -124,11 +125,9 @@ impl eframe::App for LargeFileEditorApp {
             }
         }
 
-        if has_unsaved && ctx.input(|i| i.viewport().close_requested()) {
-            if !self.allowed_to_close {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.show_close_confirmation = true;
-            }
+        if has_unsaved && ctx.input(|i| i.viewport().close_requested()) && !self.allowed_to_close {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.show_close_confirmation = true;
         }
 
         // イベントやアクションを蓄積する一時変数 (借用チェッカー対策)
@@ -595,11 +594,9 @@ impl eframe::App for LargeFileEditorApp {
                                 self.editing_text = line_str.to_string();
                             }
 
-                            if let Some(target) = self.scroll_to_line {
-                                if target == line_idx {
-                                    response.scroll_to_me(Some(egui::Align::Center));
-                                    self.scroll_to_line = None;
-                                }
+                            if self.scroll_to_line == Some(line_idx) {
+                                response.scroll_to_me(Some(egui::Align::Center));
+                                self.scroll_to_line = None;
                             }
                         }
                     }
@@ -614,10 +611,10 @@ impl eframe::App for LargeFileEditorApp {
 
         // 後処理: 一時変数に溜めたアクションを self に書き戻す (借用競合の回避完了後)
         if open_file_clicked {
-            if let Some(path) = rfd::FileDialog::new()
+            let opt_path = rfd::FileDialog::new()
                 .set_title("テキストファイルを選択")
-                .pick_file()
-            {
+                .pick_file();
+            if let Some(path) = opt_path {
                 match LargeFileEditor::open(&path, self.selected_encoding) {
                     Ok(ed) => {
                         self.editor = Some(ed);
@@ -654,44 +651,43 @@ impl eframe::App for LargeFileEditorApp {
             }
         }
 
-        if save_clicked {
-            if let Some(ref ed) = self.editor {
-                let path = ed.path.clone();
-                match ed.save(&path, self.create_backup) {
-                    Ok(_) => self.show_status("保存が完了しました。", false),
+        if save_clicked && self.editor.is_some() {
+            let ed = self.editor.as_ref().unwrap();
+            let path = ed.path.clone();
+            match ed.save(&path, self.create_backup) {
+                Ok(_) => self.show_status("保存が完了しました。", false),
+                Err(e) => self.show_status(format!("保存失敗: {}", e), true),
+            }
+        }
+
+        if save_as_clicked && self.editor.is_some() {
+            let ed = self.editor.as_ref().unwrap();
+            let opt_save_path = rfd::FileDialog::new()
+                .set_title("名前を付けて保存")
+                .set_file_name(
+                    ed.path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .as_ref(),
+                )
+                .save_file();
+            if let Some(save_path) = opt_save_path {
+                match ed.save(&save_path, false) {
+                    Ok(_) => {
+                        self.show_status(format!("保存完了: {}", save_path.display()), false)
+                    }
                     Err(e) => self.show_status(format!("保存失敗: {}", e), true),
                 }
             }
         }
 
-        if save_as_clicked {
-            if let Some(ref ed) = self.editor {
-                if let Some(save_path) = rfd::FileDialog::new()
-                    .set_title("名前を付けて保存")
-                    .set_file_name(
-                        ed.path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .as_ref(),
-                    )
-                    .save_file()
-                {
-                    match ed.save(&save_path, false) {
-                        Ok(_) => {
-                            self.show_status(format!("保存完了: {}", save_path.display()), false)
-                        }
-                        Err(e) => self.show_status(format!("保存失敗: {}", e), true),
-                    }
-                }
-            }
-        }
-
-        if batch_replace_clicked {
-            if let Some(ref ed) = self.editor {
-                if self.search_pattern.is_empty() {
-                    self.show_status("検索正規表現パターンを入力してください。", true);
-                } else if let Some(dest_path) = rfd::FileDialog::new()
+        if batch_replace_clicked && self.editor.is_some() {
+            let ed = self.editor.as_ref().unwrap();
+            if self.search_pattern.is_empty() {
+                self.show_status("検索正規表現パターンを入力してください。", true);
+            } else {
+                let opt_dest_path = rfd::FileDialog::new()
                     .set_title("一括置換後のファイル保存先")
                     .set_file_name(
                         ed.path
@@ -700,8 +696,8 @@ impl eframe::App for LargeFileEditorApp {
                             .to_string_lossy()
                             .as_ref(),
                     )
-                    .save_file()
-                {
+                    .save_file();
+                if let Some(dest_path) = opt_dest_path {
                     match ed.batch_replace(
                         &self.search_pattern,
                         &self.replace_pattern,
@@ -720,15 +716,15 @@ impl eframe::App for LargeFileEditorApp {
             }
         }
 
-        if filter_applied {
-            if let Some(ref mut ed) = self.editor {
-                ed.start_filter(&self.filter_pattern);
-            }
+        if filter_applied && self.editor.is_some() {
+            let ed = self.editor.as_mut().unwrap();
+            ed.start_filter(&self.filter_pattern);
         }
 
         if filter_cleared {
             self.filter_pattern.clear();
-            if let Some(ref mut ed) = self.editor {
+            if self.editor.is_some() {
+                let ed = self.editor.as_mut().unwrap();
                 ed.start_filter("");
             }
         }
@@ -763,14 +759,13 @@ impl eframe::App for LargeFileEditorApp {
                     });
                 });
 
-            if save_and_close_confirmed {
-                if let Some(ref ed) = self.editor {
-                    let path = ed.path.clone();
-                    let backup = self.create_backup;
-                    if let Ok(_) = ed.save(&path, backup) {
-                        self.allowed_to_close = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
+            if save_and_close_confirmed && self.editor.is_some() {
+                let ed = self.editor.as_ref().unwrap();
+                let path = ed.path.clone();
+                let backup = self.create_backup;
+                if ed.save(&path, backup).is_ok() {
+                    self.allowed_to_close = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
 

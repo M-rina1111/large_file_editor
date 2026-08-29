@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use encoding_rs::Encoding;
 use memmap2::Mmap;
 use regex::Regex;
@@ -190,7 +191,7 @@ impl LargeFileEditor {
                     let len = clean_bytes.len();
                     let b1 = clean_bytes[len - 2];
                     let b2 = clean_bytes[len - 1];
-                    if (b1 == 0x0A && b2 == 0x00) || (b1 == 0x0D && b2 == 0x00) {
+                    if (b1 == 0x0A || b1 == 0x0D) && b2 == 0x00 {
                         clean_bytes = &clean_bytes[..len - 2];
                     } else {
                         break;
@@ -202,7 +203,7 @@ impl LargeFileEditor {
                     let len = clean_bytes.len();
                     let b1 = clean_bytes[len - 2];
                     let b2 = clean_bytes[len - 1];
-                    if (b1 == 0x00 && b2 == 0x0A) || (b1 == 0x00 && b2 == 0x0D) {
+                    if (b2 == 0x0A || b2 == 0x0D) && b1 == 0x00 {
                         clean_bytes = &clean_bytes[..len - 2];
                     } else {
                         break;
@@ -322,10 +323,8 @@ impl LargeFileEditor {
                                 FileEncoding::Utf16Le => {
                                     while clean_bytes.len() >= 2 {
                                         let len = clean_bytes.len();
-                                        if (clean_bytes[len - 2] == 0x0A
-                                            && clean_bytes[len - 1] == 0x00)
-                                            || (clean_bytes[len - 2] == 0x0D
-                                                && clean_bytes[len - 1] == 0x00)
+                                         if (clean_bytes[len - 2] == 0x0A || clean_bytes[len - 2] == 0x0D)
+                                             && clean_bytes[len - 1] == 0x00
                                         {
                                             clean_bytes = &clean_bytes[..len - 2];
                                         } else {
@@ -336,10 +335,8 @@ impl LargeFileEditor {
                                 FileEncoding::Utf16Be => {
                                     while clean_bytes.len() >= 2 {
                                         let len = clean_bytes.len();
-                                        if (clean_bytes[len - 2] == 0x00
-                                            && clean_bytes[len - 1] == 0x0A)
-                                            || (clean_bytes[len - 2] == 0x00
-                                                && clean_bytes[len - 1] == 0x0D)
+                                         if (clean_bytes[len - 1] == 0x0A || clean_bytes[len - 1] == 0x0D)
+                                             && clean_bytes[len - 2] == 0x00
                                         {
                                             clean_bytes = &clean_bytes[..len - 2];
                                         } else {
@@ -456,9 +453,9 @@ impl LargeFileEditor {
 fn get_newline_bytes(raw: &[u8], encoding: FileEncoding) -> &[u8] {
     match encoding {
         FileEncoding::Utf8 | FileEncoding::ShiftJis => {
-            if raw.ends_with(&[b'\r', b'\n']) {
+            if raw.ends_with(b"\r\n") {
                 &raw[raw.len() - 2..]
-            } else if raw.ends_with(&[b'\n']) {
+            } else if raw.ends_with(b"\n") {
                 &raw[raw.len() - 1..]
             } else {
                 &[]
