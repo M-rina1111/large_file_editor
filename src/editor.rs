@@ -2,13 +2,15 @@
 use encoding_rs::Encoding;
 use memmap2::Mmap;
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread;
+
+// メモリマッピングと非同期インデックス作成により巨大ファイルを高速かつ安全に閲覧・編集するためのバックエンドモジュール。
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileEncoding {
@@ -47,8 +49,11 @@ impl FileEncoding {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LineState {
-    Modified(String),
+    /// 1行が複数行（1行以上）に編集・分割された状態
+    Modified(Vec<String>),
+    /// 行が削除された状態（0行）
     Deleted,
 }
 
@@ -65,7 +70,7 @@ pub struct LargeFileEditor {
     pub scan_finished: Arc<AtomicBool>,
 
     // 編集差分管理 (行インデックス -> 編集状態)
-    pub edited_lines: Arc<RwLock<HashMap<usize, LineState>>>,
+    pub edited_lines: Arc<RwLock<BTreeMap<usize, LineState>>>,
 
     // 非同期検索・フィルター管理
     filter_thread: Option<thread::JoinHandle<()>>,
@@ -127,7 +132,7 @@ impl LargeFileEditor {
             line_offsets,
             scan_progress,
             scan_finished,
-            edited_lines: Arc::new(RwLock::new(HashMap::new())),
+            edited_lines: Arc::new(RwLock::new(BTreeMap::new())),
             filter_thread: None,
             filter_cancel: Arc::new(AtomicBool::new(false)),
             filter_results: Arc::new(RwLock::new(Vec::new())),
@@ -137,15 +142,58 @@ impl LargeFileEditor {
         })
     }
 
+    /// インデックス作成済みの基本行数を取得する。
+    ///
+    /// なぜスキャン完了前は未確定の末尾行を除外するのか：
+    /// バックグラウンドでのインデックス作成中（`!scan_finished`）は、最後のオフセット行は
+    /// まだ次の改行が見つかっておらず終端が未確定です。もしこの行を描画対象に含めてしまうと、
+    /// 行の終端がファイル末尾（`self.file_size`）とみなされ、ファイル全体の数億文字が1行として
+    /// メモリ展開されてUIがクラッシュするため、スキャン完了までは改行が確定している行のみを返します。
+    pub fn base_lines_count(&self) -> usize {
+        let offsets = self.line_offsets.read().unwrap();
+        let len = offsets.len();
+        if self.scan_finished.load(Ordering::SeqCst) {
+            len
+        } else {
+            len.saturating_sub(1)
+        }
+    }
+
+    /// 現在安全に表示・アクセス可能な総行数を取得する（編集による増減を反映）。
+    ///
+    /// なぜ編集差分を反映して計算するのか：
+    /// ユーザーが行編集で改行を挿入して複数行に増やした場合や、行を削除した場合に、
+    /// 全体の行カウントが追従して正しく更新され、後続の行番号がずれるのを防ぐためです。
     pub fn total_lines(&self) -> usize {
-        self.line_offsets.read().unwrap().len()
+        let base = self.base_lines_count();
+        let edited = self.edited_lines.read().unwrap();
+        let mut total = base;
+        for (&orig_idx, state) in edited.iter() {
+            if orig_idx < base {
+                match state {
+                    LineState::Modified(lines) => {
+                        total = (total as isize + (lines.len() as isize - 1)).max(0) as usize;
+                    }
+                    LineState::Deleted => {
+                        total = total.saturating_sub(1);
+                    }
+                }
+            }
+        }
+        total
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
         !self.edited_lines.read().unwrap().is_empty()
     }
 
-    pub fn get_line_raw(&self, line_idx: usize) -> Option<&[u8]> {
+    /// 指定された元の行の生のバイト列スライスをmmapから取得する。
+    ///
+    /// なぜスキャン未完了時の末尾行アクセスをガードするのか：
+    /// スキャン中に未確定の行オフセットへアクセスされた場合、次の行が存在しないからといって
+    /// `file_size` までを行とみなすと、ファイル全体（数百MB〜数GB）が1行として扱われ
+    /// メモリ枯渇やUIのTDRフリーズを引き起こすためです。スキャン未完了時は確定範囲外のアクセスに対して安全にNoneを返します。
+    pub fn get_line_raw_from_mmap(&self, line_idx: usize) -> Option<&[u8]> {
         let offsets = self.line_offsets.read().unwrap();
         if line_idx >= offsets.len() {
             return None;
@@ -153,27 +201,23 @@ impl LargeFileEditor {
         let start = offsets[line_idx];
         let end = if line_idx + 1 < offsets.len() {
             offsets[line_idx + 1]
-        } else {
+        } else if self.scan_finished.load(Ordering::SeqCst) {
             self.file_size
+        } else {
+            // スキャン途中で次の改行が未確定の場合は、巨大なファイル全体を1行として返さないようガード
+            return None;
         };
 
-        if start >= self.file_size {
+        if start >= self.file_size || start >= end || end > self.file_size {
             return None;
         }
 
         Some(&self.mmap[start..end])
     }
 
-    pub fn get_line_string(&self, line_idx: usize) -> Option<String> {
-        // メモリ上の編集差分を確認
-        if let Some(state) = self.edited_lines.read().unwrap().get(&line_idx) {
-            return match state {
-                LineState::Modified(s) => Some(s.clone()),
-                LineState::Deleted => None,
-            };
-        }
-
-        let raw_bytes = self.get_line_raw(line_idx)?;
+    /// 元のmmap上の指定行の文字列を取得する（改行トリミング・デコード済み）。
+    pub fn get_line_string_raw_from_mmap(&self, line_idx: usize) -> Option<String> {
+        let raw_bytes = self.get_line_raw_from_mmap(line_idx)?;
         let mut clean_bytes = raw_bytes;
 
         // 末尾の改行バイトを除去
@@ -217,14 +261,106 @@ impl LargeFileEditor {
         Some(res.into_owned())
     }
 
-    pub fn edit_line(&self, line_idx: usize, new_content: String) {
-        let mut edited = self.edited_lines.write().unwrap();
-        edited.insert(line_idx, LineState::Modified(new_content));
+    /// 後方互換用：生のバイト列取得。
+    pub fn get_line_raw(&self, line_idx: usize) -> Option<&[u8]> {
+        self.get_line_raw_from_mmap(line_idx)
     }
 
-    pub fn delete_line(&self, line_idx: usize) {
+    /// 表示行インデックスから、(元の行インデックス, 内容文字列, 編集済みフラグ) を取得する。
+    ///
+    /// なぜ差分テーブルを順次適用してインデックスを解決するのか：
+    /// 編集箇所（BTreeMap）は通常数行〜数十行と非常に少ないため、元の巨大な配列全体を作り直すことなく
+    /// O(K)（Kは編集箇所数）で瞬時に表示行の内容と元の行番号を特定できるためです。
+    pub fn get_display_line(&self, display_idx: usize) -> Option<(usize, String, bool)> {
+        let edited = self.edited_lines.read().unwrap();
+        if edited.is_empty() {
+            let s = self.get_line_string_raw_from_mmap(display_idx)?;
+            return Some((display_idx, s, false));
+        }
+
+        let base_lines = self.base_lines_count();
+        let mut curr_disp = 0;
+        let mut curr_orig = 0;
+
+        for (&orig_idx, state) in edited.iter() {
+            if orig_idx >= base_lines {
+                break;
+            }
+            let unedited_count = orig_idx.saturating_sub(curr_orig);
+            if display_idx < curr_disp + unedited_count {
+                let target_orig = curr_orig + (display_idx - curr_disp);
+                let s = self.get_line_string_raw_from_mmap(target_orig)?;
+                return Some((target_orig, s, false));
+            }
+            curr_disp += unedited_count;
+            curr_orig = orig_idx;
+
+            match state {
+                LineState::Modified(lines) => {
+                    if display_idx < curr_disp + lines.len() {
+                        let sub_idx = display_idx - curr_disp;
+                        return Some((orig_idx, lines[sub_idx].clone(), true));
+                    }
+                    curr_disp += lines.len();
+                }
+                LineState::Deleted => {}
+            }
+            curr_orig += 1;
+        }
+
+        if curr_orig < base_lines {
+            let target_orig = curr_orig + display_idx.saturating_sub(curr_disp);
+            if target_orig < base_lines {
+                let s = self.get_line_string_raw_from_mmap(target_orig)?;
+                return Some((target_orig, s, false));
+            }
+        }
+
+        None
+    }
+
+    /// 表示用の行文字列を取得する。
+    pub fn get_line_string(&self, display_idx: usize) -> Option<String> {
+        self.get_display_line(display_idx).map(|(_, s, _)| s)
+    }
+
+    /// 画面表示に必要な行データ（数十行分）を一括で取得する。
+    ///
+    /// 返り値: Vec<(表示行インデックス, 元の行インデックス, 行文字列, 編集フラグ)>
+    /// なぜ一括取得するのか：1フレームの描画に必要な行データを1度のロック取得でまとめてマッピングすることで、
+    /// バックグラウンドスキャンとのロック競合を最小化し、描画を高速化するためです。
+    pub fn get_display_lines_batch(
+        &self,
+        start_line: usize,
+        end_line: usize,
+    ) -> Vec<(usize, usize, String, bool)> {
+        let mut result = Vec::with_capacity(end_line.saturating_sub(start_line));
+        for idx in start_line..end_line {
+            if let Some((orig_idx, line_str, is_edited)) = self.get_display_line(idx) {
+                result.push((idx, orig_idx, line_str, is_edited));
+            }
+        }
+        result
+    }
+
+    /// 指定された元の行を新しい内容で置換する。改行が含まれている場合は複数行として分割登録される。
+    ///
+    /// なぜ改行で分割して保持するのか：
+    /// 右ペインの編集で改行を入れて行が増えた際に、エディタ全体の行数が増加し、
+    /// それぞれの行が独立した行番号を持って表示されるようにするためです。
+    pub fn edit_line(&self, orig_idx: usize, new_content: String) {
+        let lines: Vec<String> = new_content
+            .split('\n')
+            .map(|s| s.trim_end_matches('\r').to_string())
+            .collect();
         let mut edited = self.edited_lines.write().unwrap();
-        edited.insert(line_idx, LineState::Deleted);
+        edited.insert(orig_idx, LineState::Modified(lines));
+    }
+
+    /// 指定された元の行を削除する。
+    pub fn delete_line(&self, orig_idx: usize) {
+        let mut edited = self.edited_lines.write().unwrap();
+        edited.insert(orig_idx, LineState::Deleted);
     }
 
     // 非同期フィルター処理の開始
@@ -277,16 +413,26 @@ impl LargeFileEditor {
                     break;
                 }
 
-                // インデックス作成がどこまで進んだかを取得
-                let max_line = offsets.read().unwrap().len();
+                // インデックス作成の進捗状況を取得
+                // なぜsafe_max_lineを用いるのか：
+                // スキャン中の末尾行はまだ次の改行が見つかっておらず終端が未確定です。
+                // スキャン完了前はその行を検索対象に含めず、次の改行が発見されるまで待機することで
+                // 検索スレッドで巨大なファイル末尾までをデコードする負荷・クラッシュを回避します。
+                let is_scan_finished = scan_finished.load(Ordering::SeqCst);
+                let current_offsets_len = offsets.read().unwrap().len();
+                let safe_max_line = if is_scan_finished {
+                    current_offsets_len
+                } else {
+                    current_offsets_len.saturating_sub(1)
+                };
 
-                if current_line >= max_line {
+                if current_line >= safe_max_line {
                     // 全インデックス作成が終わっているなら終了
-                    if scan_finished.load(Ordering::SeqCst) {
+                    if is_scan_finished {
                         break;
                     }
                     // まだインデックス作成中なら、少し待って再試行
-                    thread::sleep(std::time::Duration::from_millis(50));
+                    thread::sleep(std::time::Duration::from_millis(30));
                     continue;
                 }
 
@@ -295,14 +441,15 @@ impl LargeFileEditor {
                     // 編集差分があるか確認
                     if let Some(state) = edited_lines.read().unwrap().get(&current_line) {
                         match state {
-                            LineState::Modified(s) => re.is_match(s),
+                            LineState::Modified(lines) => lines.iter().any(|l| re.is_match(l)),
                             LineState::Deleted => false,
                         }
                     } else {
                         // ファイルから直接バイトを取得して一時的に文字列にデコード
-                        let start = offsets.read().unwrap()[current_line];
-                        let end = if current_line + 1 < max_line {
-                            offsets.read().unwrap()[current_line + 1]
+                        let offsets_guard = offsets.read().unwrap();
+                        let start = offsets_guard[current_line];
+                        let end = if current_line + 1 < offsets_guard.len() {
+                            offsets_guard[current_line + 1]
                         } else {
                             file_size
                         };
@@ -378,20 +525,48 @@ impl LargeFileEditor {
         let out_file = File::create(&temp_file_path)?;
         let mut writer = BufWriter::new(out_file);
 
-        let total_lines = self.total_lines();
+        let base_lines = self.base_lines_count();
         let encoder = self.encoding.to_encoding();
+        let edited = self.edited_lines.read().unwrap();
 
-        for i in 0..total_lines {
-            if let Some(line) = self.get_line_string(i) {
-                // 行の内容をエンコードして書き出し
-                let (encoded, _, _) = encoder.encode(&line);
-                writer.write_all(&encoded)?;
+        // 既定の改行バイト列（ファイル内に改行があればそれを採用、なければCRLF/LF）
+        let default_newline: &[u8] = match self.encoding {
+            FileEncoding::Utf8 | FileEncoding::ShiftJis => b"\r\n",
+            FileEncoding::Utf16Le => &[0x0D, 0x00, 0x0A, 0x00],
+            FileEncoding::Utf16Be => &[0x00, 0x0D, 0x00, 0x0A],
+        };
 
-                // 改行コードを維持して書き出し
-                if let Some(raw) = self.get_line_raw(i) {
-                    let newline_bytes = get_newline_bytes(raw, self.encoding);
-                    writer.write_all(newline_bytes)?;
+        for i in 0..base_lines {
+            if let Some(state) = edited.get(&i) {
+                match state {
+                    LineState::Modified(lines) => {
+                        let raw = self.get_line_raw_from_mmap(i);
+                        let newline = raw
+                            .map(|r| get_newline_bytes(r, self.encoding))
+                            .unwrap_or(default_newline);
+                        let nl = if newline.is_empty() {
+                            default_newline
+                        } else {
+                            newline
+                        };
+
+                        for (sub_idx, sub_line) in lines.iter().enumerate() {
+                            let (encoded, _, _) = encoder.encode(sub_line);
+                            writer.write_all(&encoded)?;
+                            if sub_idx + 1 < lines.len()
+                                || !newline.is_empty()
+                                || i + 1 < base_lines
+                            {
+                                writer.write_all(nl)?;
+                            }
+                        }
+                    }
+                    LineState::Deleted => {
+                        // 削除された行はスキップ
+                    }
                 }
+            } else if let Some(raw) = self.get_line_raw_from_mmap(i) {
+                writer.write_all(raw)?;
             }
         }
 
@@ -662,5 +837,86 @@ mod tests {
         assert_eq!(new_editor.total_lines(), 3);
         assert_eq!(new_editor.get_line_string(0).unwrap(), "log level: DEBUG");
         assert_eq!(new_editor.get_line_string(2).unwrap(), "log level: DEBUG");
+    }
+
+    /// 行編集で改行を含めた際に、行数（total_lines）が増加し、行表示および行番号が正しく追従することを検証するテスト。
+    ///
+    /// なぜこのテストが必要か：
+    /// ユーザーが1行を編集して複数行（改行）に増やした際、行数が正しく増加して各行が個別の行として
+    /// 表示・取得できることを保証するためです。
+    #[test]
+    fn test_multiline_edit_and_line_count() {
+        let mut file = NamedTempFile::new().unwrap();
+        let content = "Line 1\nLine 2\nLine 3\n";
+        file.write_all(content.as_bytes()).unwrap();
+        file.flush().unwrap();
+
+        let editor = LargeFileEditor::open(file.path(), FileEncoding::Utf8).unwrap();
+        while !editor.scan_finished.load(Ordering::SeqCst) {
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        assert_eq!(editor.total_lines(), 3);
+
+        // 1行目（Line 2）を改行を含む3行に編集
+        editor.edit_line(1, "Line 2-A\nLine 2-B\nLine 2-C".to_string());
+
+        // 行数が 3 から 5 (+2) に増えていることを検証
+        assert_eq!(editor.total_lines(), 5);
+
+        // 表示行が正しくマッピングされているか検証
+        assert_eq!(editor.get_line_string(0).unwrap(), "Line 1");
+        assert_eq!(editor.get_line_string(1).unwrap(), "Line 2-A");
+        assert_eq!(editor.get_line_string(2).unwrap(), "Line 2-B");
+        assert_eq!(editor.get_line_string(3).unwrap(), "Line 2-C");
+        assert_eq!(editor.get_line_string(4).unwrap(), "Line 3");
+
+        // 一括取得バッチでも正しく取得できることを検証
+        let batch = editor.get_display_lines_batch(0, 5);
+        assert_eq!(batch.len(), 5);
+        assert_eq!(batch[1].2, "Line 2-A");
+        assert_eq!(batch[1].3, true); // is_edited が true
+        assert_eq!(batch[4].2, "Line 3");
+        assert_eq!(batch[4].3, false); // is_edited が false
+
+        // 行削除の検証
+        editor.delete_line(2); // 元の Line 3 を削除
+        assert_eq!(editor.total_lines(), 4);
+        assert_eq!(editor.get_line_string(3).unwrap(), "Line 2-C");
+    }
+
+    /// 複数行に編集した内容がファイル保存（save）時に正しく書き出されるかを検証するテスト。
+    ///
+    /// なぜこのテストが必要か：
+    /// メモリ上で改行分割された差分が、ファイルストリーミング保存時にも正確に改行コード付きで書き込まれることを担保するためです。
+    #[test]
+    fn test_multiline_save() {
+        let mut file = NamedTempFile::new().unwrap();
+        let content = "First\nSecond\nThird\n";
+        file.write_all(content.as_bytes()).unwrap();
+        file.flush().unwrap();
+
+        let editor = LargeFileEditor::open(file.path(), FileEncoding::Utf8).unwrap();
+        while !editor.scan_finished.load(Ordering::SeqCst) {
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        // 0行目と1行目を編集
+        editor.edit_line(0, "Header 1\nHeader 2".to_string());
+        editor.edit_line(1, "Modified Second".to_string());
+
+        let save_file = NamedTempFile::new().unwrap();
+        editor.save(save_file.path(), false).unwrap();
+
+        let reloaded = LargeFileEditor::open(save_file.path(), FileEncoding::Utf8).unwrap();
+        while !reloaded.scan_finished.load(Ordering::SeqCst) {
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        assert_eq!(reloaded.total_lines(), 4);
+        assert_eq!(reloaded.get_line_string(0).unwrap(), "Header 1");
+        assert_eq!(reloaded.get_line_string(1).unwrap(), "Header 2");
+        assert_eq!(reloaded.get_line_string(2).unwrap(), "Modified Second");
+        assert_eq!(reloaded.get_line_string(3).unwrap(), "Third");
     }
 }

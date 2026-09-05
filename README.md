@@ -15,6 +15,7 @@ A blazing-fast, cross-platform desktop text editor written in Rust, designed spe
 ## Features / 主な機能
 
 - **Blazing-Fast Huge File Loading** / **超高速のファイルロード**:
+
   - Leverages memory mapping (`memmap2`) and asynchronous line indexing to open GB-class files almost instantly.
   - メモリマッピング（`memmap2`）と非同期の行インデックス生成により、巨大ファイルも瞬時にロード。
 - **Encoding Support** / **多言語エンコーディング対応**:
@@ -35,6 +36,7 @@ A blazing-fast, cross-platform desktop text editor written in Rust, designed spe
 - **Safe Save & Backup** / **安全な保存とバックアップ**:
   - Prevents data loss with optional automatic backup generation (`.bak`).
   - 保存時に自動でバックアップファイル（`.bak`）を作成する安全オプションを搭載。
+  
 ---
 
 ## Installation & Run / 導入と実行
@@ -69,11 +71,13 @@ This repository includes pre-configured GitHub Actions under `.github/workflows/
 本リポジトリには、`.github/workflows/` 以下に以下のGitHub Actions自動化が設定されています：
 
 1. **CI (`ci.yml`)**:
+
    - Runs formatting, clippy lint checks, cargo checks, and tests across macOS, Windows, and Linux on every push or pull request.
    - すべてのプッシュおよびプルリクエスト時に、macOS、Windows、Linux上でフォーマットチェック、clippyによるコード解析、テストを自動実行します。
 2. **Release (`release.yml`)**:
    - Automatically cross-compiles release binaries for macOS (Intel & Apple Silicon), Windows, and Linux, and uploads them to GitHub Releases upon pushing a version tag (e.g., `v1.0.0`).
    - `v*` 形式のタグがプッシュされた際に、macOS（Intel / Apple Silicon）、Windows、Linux向けにプロダクションビルド（`cargo build --release`）を行い、GitHub Releaseの成果物（Assets）として自動アップロードします。
+  
 ---
 
 ## Git Hooks / コミット前自動チェック
